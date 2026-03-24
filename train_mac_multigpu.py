@@ -4,6 +4,7 @@
 #     "adam-atan2-pytorch>=0.1.18",
 #     "setuptools",
 #     "titans-pytorch",
+#     "tensorboard",
 #     "tqdm",
 #     "wandb"
 # ]
@@ -15,6 +16,9 @@ Uses GPUs 4,5,6,7 (4× H100-80GB).
 
 Launch command:
     torchrun --nproc_per_node=4 train_mac_multigpu.py
+
+Monitor training (in another terminal):
+    tensorboard --logdir=runs/ --port=6006
 """
 
 import os
@@ -51,11 +55,14 @@ os.environ["LD_LIBRARY_PATH"] = _extra_libs + (
 import random
 import gzip
 import numpy as np
+from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
 
 import tqdm
 
@@ -94,6 +101,12 @@ PRIME_LENGTH = 100
 GENERATE_LENGTH = 512
 SHOULD_GENERATE = True
 SEQ_LEN = 512
+
+# ── Checkpoint related ────────────────────────────────────────────────────────
+
+CHECKPOINT_DIR = Path('./checkpoints')
+CHECKPOINT_EVERY = 2500        # save checkpoint every N steps
+RESUME_FROM_CHECKPOINT = True   # auto-resume from latest checkpoint if exists
 
 # ── Neural memory related ───────────────────────────────────────────────────
 
@@ -143,6 +156,28 @@ def decode_token(token):
 def decode_tokens(tokens):
     return ''.join(list(map(decode_token, tokens)))
 
+# ── Checkpoint helpers ────────────────────────────────────────────────────────
+
+def save_checkpoint(model, optim, step, epoch, path):
+    """Save model, optimizer, and training state (rank 0 only)."""
+    if not is_main_process():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        'step': step,
+        'epoch': epoch,
+        'model_state_dict': model.module.state_dict(),  # unwrap DDP
+        'optimizer_state_dict': optim.state_dict(),
+    }, path)
+    print(f'  ✓ Checkpoint saved: {path}  (step {step})')
+
+def load_latest_checkpoint(checkpoint_dir):
+    """Find the latest checkpoint in directory, return path or None."""
+    if not checkpoint_dir.exists():
+        return None
+    ckpts = sorted(checkpoint_dir.glob('ckpt_step_*.pt'))
+    return ckpts[-1] if ckpts else None
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -151,12 +186,18 @@ def main():
     local_rank = setup_distributed()
     device = torch.device(f"cuda:{local_rank}")
 
-    # ── wandb (only on rank 0) ───────────────────────────────────────────
+    # ── Logging: wandb + TensorBoard (only on rank 0) ────────────────────
+    writer = None
     if is_main_process():
         import wandb
         wandb.init(project=PROJECT_NAME, mode='disabled' if not WANDB_ONLINE else 'online')
         wandb.run.name = RUN_NAME
         wandb.run.save()
+
+        log_dir = f'runs/{RUN_NAME}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+        writer = SummaryWriter(log_dir=log_dir)
+        print(f'  ✦ TensorBoard logs → {log_dir}')
+        print(f'    Run: tensorboard --logdir=runs/ --port=6006')
 
     # ── Memory model ─────────────────────────────────────────────────────
     if USE_MEM_ATTENTION_MODEL:
@@ -270,8 +311,38 @@ def main():
     # ── Optimizer ────────────────────────────────────────────────────────
     optim = AdoptAtan2(model.parameters(), lr=LEARNING_RATE)
 
+    # ── Resume from checkpoint ───────────────────────────────────────────
+    start_step = 0
+    start_epoch = 0
+    if RESUME_FROM_CHECKPOINT:
+        ckpt_path = load_latest_checkpoint(CHECKPOINT_DIR)
+        if ckpt_path is not None:
+            if is_main_process():
+                print(f'  ↻ Resuming from {ckpt_path}')
+            # load on CPU first, then move — avoids GPU OOM spike
+            ckpt = torch.load(ckpt_path, map_location='cpu')
+            model.module.load_state_dict(ckpt['model_state_dict'])
+            optim.load_state_dict(ckpt['optimizer_state_dict'])
+            start_step = ckpt['step'] + 1
+            start_epoch = ckpt.get('epoch', 0)
+            del ckpt
+            if is_main_process():
+                print(f'    Resuming from step {start_step}')
+        else:
+            if is_main_process():
+                print('  ✦ No checkpoint found, starting from scratch.')
+
+    # ── Fast-forward data iterators if resuming ──────────────────────────
+    # Skip batches already processed so data order stays consistent
+    if start_step > 0 and is_main_process():
+        print(f'  ⏩ Fast-forwarding data loader by {start_step} steps...')
+    for _ in range(start_step):
+        next(train_iter)
+    dist.barrier()
+
     # ── Training loop ────────────────────────────────────────────────────
-    pbar = tqdm.tqdm(range(NUM_BATCHES), mininterval=10., desc='training',
+    pbar = tqdm.tqdm(range(start_step, NUM_BATCHES), initial=start_step,
+                     total=NUM_BATCHES, mininterval=10., desc='training',
                      disable=not is_main_process())
 
     for i in pbar:
@@ -279,26 +350,35 @@ def main():
 
         for __ in range(GRADIENT_ACCUMULATE_EVERY):
             loss = model(next(train_iter), return_loss=True)
-            # scale loss by grad-accum steps so that the averaged gradient
-            # magnitude stays the same regardless of accumulation count
             (loss / GRADIENT_ACCUMULATE_EVERY).backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optim.step()
         optim.zero_grad()
 
+        train_loss = loss.item()
+
         if is_main_process():
-            print(f'training loss: {loss.item():.4f}')
+            print(f'training loss: {train_loss:.4f}')
             import wandb
-            wandb.log(dict(loss=loss.item()))
+            wandb.log(dict(loss=train_loss), step=i)
+            # ── TensorBoard ──
+            writer.add_scalar('Loss/train', train_loss, i)
 
         # ── Validation ───────────────────────────────────────────────
         if i % VALIDATE_EVERY == 0:
             model.eval()
             with torch.no_grad():
                 val_loss = model(next(val_iter), return_loss=True)
+            val_loss_val = val_loss.item()
             if is_main_process():
-                print(f'validation loss: {val_loss.item():.4f}')
+                print(f'validation loss: {val_loss_val:.4f}')
+                writer.add_scalar('Loss/val', val_loss_val, i)
+                # ── BPC (bits per character) — standard enwik8 metric ──
+                train_bpc = train_loss / np.log(2)
+                val_bpc   = val_loss_val / np.log(2)
+                writer.add_scalar('BPC/train', train_bpc, i)
+                writer.add_scalar('BPC/val', val_bpc, i)
 
         # ── Generation ───────────────────────────────────────────────
         if SHOULD_GENERATE and i % GENERATE_EVERY == 0 and is_main_process():
@@ -307,15 +387,31 @@ def main():
             prime = decode_tokens(inp)
             print(f'{prime} \n\n {"*" * 100}')
 
-            # sample from the unwrapped model (no DDP wrapper)
             sample = model.module.sample(
                 inp[None, ...], GENERATE_LENGTH, use_cache=USE_FAST_INFERENCE
             )
             output_str = decode_tokens(sample[0])
             print(output_str)
+            writer.add_text('Generated', f'```\n{output_str}\n```', i)
 
-        # sync all ranks before next step
+        # ── Save checkpoint ──────────────────────────────────────────
+        if i > 0 and i % CHECKPOINT_EVERY == 0:
+            save_checkpoint(
+                model, optim, step=i, epoch=0,
+                path=CHECKPOINT_DIR / f'ckpt_step_{i:06d}.pt'
+            )
+
         dist.barrier()
+
+    # ── Final checkpoint ─────────────────────────────────────────────────
+    save_checkpoint(
+        model, optim, step=NUM_BATCHES, epoch=0,
+        path=CHECKPOINT_DIR / f'ckpt_step_{NUM_BATCHES:06d}_final.pt'
+    )
+
+    if is_main_process() and writer is not None:
+        writer.close()
+        print('\n✓ Training complete. TensorBoard logs saved to runs/')
 
     # ── Cleanup ──────────────────────────────────────────────────────────
     cleanup_distributed()
