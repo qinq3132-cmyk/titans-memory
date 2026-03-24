@@ -9,6 +9,36 @@
 # ]
 # ///
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+
+# nvcc 位于 /opt/conda/bin，设 CUDA_HOME 指向此处
+# titans 环境中 cusparse 等头文件来自 pip nvidia-* 包，通过 CPATH 补充
+os.environ["CUDA_HOME"] = "/opt/conda"
+_nvidia_base = "/opt/conda/envs/titans/lib/python3.10/site-packages/nvidia"
+_extra_includes = ":".join([
+    f"{_nvidia_base}/cusparse/include",
+    f"{_nvidia_base}/cublas/include",
+    f"{_nvidia_base}/cufft/include",
+    f"{_nvidia_base}/curand/include",
+    f"{_nvidia_base}/cusolver/include",
+    f"{_nvidia_base}/nvjitlink/include",
+    f"{_nvidia_base}/cuda_runtime/include",
+])
+os.environ["CPATH"] = _extra_includes + (
+    ":" + os.environ["CPATH"] if os.environ.get("CPATH") else ""
+)
+_extra_libs = ":".join([
+    "/opt/conda/lib",
+    f"{_nvidia_base}/cuda_runtime/lib",
+    f"{_nvidia_base}/cusparse/lib",
+    f"{_nvidia_base}/cublas/lib",
+    f"{_nvidia_base}/nvjitlink/lib",
+])
+os.environ["LD_LIBRARY_PATH"] = _extra_libs + (
+    ":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else ""
+)
+
 import random
 import tqdm
 import gzip
@@ -71,7 +101,7 @@ WANDB_ONLINE = False # turn this on to pipe experiment to cloud
 
 # perf related
 
-USE_ACCELERATED_SCAN = True
+USE_ACCELERATED_SCAN = False  # accelerated_scan triton kernel 与当前 CUDA/Triton 版本不兼容，关闭回退到纯 PyTorch 实现
 USE_FLEX_ATTN = True
 USE_FAST_INFERENCE = False
 
