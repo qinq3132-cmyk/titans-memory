@@ -15,3 +15,13 @@ from titans_pytorch.memory_models import (
 from titans_pytorch.mac_transformer import (
     MemoryAsContextTransformer
 )
+
+from titans_pytorch.memory_models_memristor import (
+    MemristorConfig,
+    MemristorMVM,
+    MemoryMLP_Memristor,
+    MemoryAttention_Memristor,
+    GatedResidualMemoryMLP_Memristor,
+    FactorizedMemoryMLP_Memristor,
+    MemorySwiGluMLP_Memristor,
+)

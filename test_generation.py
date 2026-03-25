@@ -1,4 +1,4 @@
-"""Quick script to check generation quality of latest checkpoint."""
+"""Generation quality showcase — loads ckpt_step_097500.pt."""
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 os.environ["CUDA_HOME"] = "/opt/conda"
@@ -55,13 +55,11 @@ model = MemoryAsContextTransformer(
     )
 ).cuda()
 
-# ── Load latest checkpoint ──
-ckpt_dir = Path('./checkpoints')
-ckpts = sorted(ckpt_dir.glob('ckpt_step_*.pt'))
-latest = ckpts[-1]
-print(f"Loading checkpoint: {latest}")
+# ── Load checkpoint ──
+CKPT_PATH = Path('./checkpoints/ckpt_step_097500.pt')
+print(f"Loading checkpoint: {CKPT_PATH}")
 
-ckpt = torch.load(latest, map_location='cpu')
+ckpt = torch.load(CKPT_PATH, map_location='cpu')
 model.load_state_dict(ckpt['model_state_dict'])
 step = ckpt['step']
 print(f"Step: {step}")
@@ -97,43 +95,90 @@ print("\n" + "="*60)
 print("GENERATION SAMPLES")
 print("="*60)
 
-prompts = [
-    b"The United States of America is a country",
-    b"In 1945, the Second World War ended when",
-    b"<title>Albert Einstein</title>\n<text>Albert Einstein was",
-]
+GENERATE_LEN = 400   # characters to generate per prompt
 
-for raw_prompt in prompts:
-    prompt_tensor = torch.tensor(list(raw_prompt), dtype=torch.long).cuda()
-    prompt_str = raw_prompt.decode('utf-8')
-    
-    print(f"\n--- PROMPT ({len(raw_prompt)} bytes) ---")
-    print(prompt_str)
-    print("--- GENERATED ---")
-    
-    with torch.no_grad():
-        sample = model.sample(prompt_tensor[None, ...], seq_len=len(raw_prompt)+256, use_cache=False)
-    
-    output = decode_tokens(sample[0])
-    print(output)
-    print()
+# ── Prompt categories ────────────────────────────────────────────────────────
+prompt_groups = {
+    "Wikipedia article openings": [
+        b"<title>Isaac Newton</title>\n<text>Isaac Newton was",
+        b"<title>World War II</title>\n<text>World War II was a global conflict that",
+        b"<title>Python (programming language)</title>\n<text>Python is a high-level",
+        b"<title>Black hole</title>\n<text>A black hole is a region of spacetime where",
+        b"<title>Renaissance</title>\n<text>The Renaissance was a period in European history",
+        b"<title>DNA</title>\n<text>Deoxyribonucleic acid (DNA) is a molecule that",
+    ],
+    "Encyclopedic facts": [
+        b"The capital of France is Paris, which",
+        b"The speed of light in a vacuum is approximately",
+        b"The human brain contains approximately",
+        b"Mount Everest, the tallest mountain on Earth,",
+        b"The Roman Empire fell in 476 AD when",
+        b"Charles Darwin proposed the theory of evolution",
+    ],
+    "Historical events": [
+        b"In 1969, Neil Armstrong became the first human to",
+        b"The French Revolution began in 1789 when",
+        b"In 1945, the Second World War ended when",
+        b"The Berlin Wall fell in 1989, leading to",
+        b"The discovery of penicillin by Alexander Fleming in 1928",
+    ],
+    "Science & technology": [
+        b"The theory of general relativity, developed by Einstein,",
+        b"Quantum mechanics describes the behavior of particles at",
+        b"The invention of the internet transformed",
+        b"CRISPR is a gene-editing technology that allows",
+        b"Neural networks are computational models inspired by",
+    ],
+    "Wiki markup continuation": [
+        b"==History==\nThe origins of the",
+        b"==References==\n* [[",
+        b"{{Infobox scientist\n| name = ",
+        b"[[Category:Nobel Prize winners]]\n\n==Biography==\n",
+    ],
+}
 
-# ── Test 3: Actual val data continuation ──
-print("\n" + "="*60)
-print("VAL DATA CONTINUATION (prime=100 bytes)")
-print("="*60)
+def run_prompts(groups, generate_len):
+    for group_name, prompts in groups.items():
+        print("\n" + "=" * 70)
+        print(f"  {group_name.upper()}")
+        print("=" * 70)
+        for raw_prompt in prompts:
+            prompt_tensor = torch.tensor(list(raw_prompt), dtype=torch.long).cuda()
+            prompt_str = raw_prompt.decode('utf-8', errors='replace')
+            print(f"\n{'─'*60}")
+            print(f"PROMPT ({len(raw_prompt)} bytes): {repr(prompt_str)[:80]}")
+            print(f"{'─'*60}")
+            with torch.no_grad():
+                sample = model.sample(
+                    prompt_tensor[None, ...],
+                    seq_len=len(raw_prompt) + generate_len,
+                    use_cache=False
+                )
+            # only print the generated portion (after the prompt)
+            generated = decode_tokens(sample[0][len(raw_prompt):])
+            print(f"[PROMPT] {prompt_str}")
+            print(f"[GENERATED] {generated}")
 
-for i in range(3):
-    start = torch.randint(0, data_val.size(0) - 600, (1,))
-    seq = data_val[start:start+100].long().cuda()
-    
+run_prompts(prompt_groups, GENERATE_LEN)
+
+# ── Actual val data continuation ─────────────────────────────────────────────
+print("\n\n" + "=" * 70)
+print("  REAL VAL DATA CONTINUATION  (prime = 150 bytes → generate 400)")
+print("=" * 70)
+
+torch.manual_seed(99)   # fixed seed for reproducible showcase
+NUM_VAL_CONTINUATIONS = 8
+
+for i in range(NUM_VAL_CONTINUATIONS):
+    start = torch.randint(0, data_val.size(0) - 700, (1,))
+    seq = data_val[start : start + 150].long().cuda()
+
     prime_str = decode_tokens(seq)
-    print(f"\n--- PRIME #{i+1} ---")
+    print(f"\n{'─'*60}")
+    print(f"PRIME #{i+1}:")
     print(prime_str)
-    print("--- CONTINUATION ---")
-    
+    print("CONTINUATION:")
     with torch.no_grad():
-        sample = model.sample(seq[None, ...], seq_len=400, use_cache=False)
-    
-    output = decode_tokens(sample[0])
+        sample = model.sample(seq[None, ...], seq_len=550, use_cache=False)
+    output = decode_tokens(sample[0][150:])
     print(output)
