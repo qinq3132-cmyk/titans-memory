@@ -227,6 +227,14 @@ def main():
             use_accelerated_scan=False,
             per_parameter_lr_modulation=True,
             spectral_norm_surprises=True,
+            # 推理阶段对动态权重量化+加噪（eval 模式下生效，训练不受影响）
+            quant_noise_cfg=dict(
+                enabled=True,
+                bit=4,            # 均匀量化位数
+                noise_scale=0.05, # 高斯噪声强度（相对权重最大值）
+                noise_method='add',
+                noise_range='max',
+            ),
         ),
     ).to(device)
 

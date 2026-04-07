@@ -22,6 +22,8 @@ from titans_pytorch.memory_models import(
     ResidualNorm
 )
 
+from titans_pytorch.quant_noise_mem import quantize_weight_dict
+
 import einx
 from einops import einsum, rearrange, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange, Reduce
@@ -293,7 +295,8 @@ class NeuralMemory(Module):
         default_model_kwargs: dict = dict(
             depth = 2,
             expansion_factor = 4.
-        )
+        ),
+        quant_noise_cfg: dict | None = None,  # 推理时对动态权重施加量化+加噪，None 表示禁用
     ):
         super().__init__()
         dim_head = default(dim_head, dim)
@@ -537,6 +540,19 @@ class NeuralMemory(Module):
         self.use_accelerated_scan = use_accelerated_scan
 
         self.register_buffer('zero', torch.tensor(0.), persistent = False)
+
+        # quant + noise for retrieve phase (inference only)
+        # default: 4-bit uniform quantization + Gaussian noise (scale=0.05)
+        _default_quant_cfg = dict(
+            enabled=False,
+            bit=4,
+            noise_scale=0.05,
+            noise_method='add',
+            noise_range='max',
+        )
+        if quant_noise_cfg is not None:
+            _default_quant_cfg.update(quant_noise_cfg)
+        self._quant_noise_cfg = _default_quant_cfg
 
     @property
     def memory_model_parameter_dict(self):
@@ -875,8 +891,20 @@ class NeuralMemory(Module):
         queries = rearrange(queries, 'b h (n c) d -> (b h n) c d', c = chunk_size)
 
         # forward functional call
+        # apply quantization + noise to dynamic weights during inference (eval mode)
+        _qcfg = self._quant_noise_cfg
+        if _qcfg['enabled'] and not self.training:
+            _weights_for_retrieve = quantize_weight_dict(
+                dict(weights),
+                bit=_qcfg['bit'],
+                noise_scale=_qcfg['noise_scale'],
+                noise_method=_qcfg['noise_method'],
+                noise_range=_qcfg['noise_range'],
+            )
+        else:
+            _weights_for_retrieve = dict(weights)
 
-        values = functional_call(self.memory_model, dict(weights), queries)
+        values = functional_call(self.memory_model, _weights_for_retrieve, queries)
 
         # reconstitute batch dimension
 
