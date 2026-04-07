@@ -172,5 +172,46 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Model checkpoints
 checkpoints/
-checkpoints/
+checkpoints_baseline/
+checkpoints_v2/
+checkpoints_v3/
+
+# PyTorch model files
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Dataset and data files
+data/
+*.gz
+*.zip
+*.tar
+*.tar.gz
+*.hdf5
+*.h5
+*.npy
+*.npz
+*.csv
+*.parquet
+*.arrow
+*.jsonl
+
+# TensorBoard / training run logs
+runs/
+runs_baseline/
+runs_v2/
+runs_v3/
+
+# Training log files
+*.log
+
+# Evaluation results
+eval_seqlen_results/
+quantization_noise/
+
+# PDF files
+*.pdf

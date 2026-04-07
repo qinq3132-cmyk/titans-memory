@@ -161,6 +161,55 @@ def run_prompts(groups, generate_len):
 
 run_prompts(prompt_groups, GENERATE_LEN)
 
+# ── Test 3: Few-shot prompting（上下文引导）────────────────────────────────────
+# 原理：模型训练于字符续写，不懂"问答"。
+# 通过在 prompt 中预置 2-3 个示例，让模型从上下文中"模仿"格式。
+# 示例需要贴近 enwik8（Wikipedia 风格），效果最好。
+print("\n\n" + "=" * 70)
+print("  FEW-SHOT PROMPTED GENERATION（上下文引导，对比无引导效果）")
+print("=" * 70)
+
+# Few-shot 模板：示例尽量贴近 enwik8 的 Wikipedia 写作风格
+FEW_SHOT_PREFIX = """\
+<title>Albert Einstein</title>
+<text>Albert Einstein (14 March 1879 - 18 April 1955) was a German-born theoretical physicist who is widely held to be one of the greatest scientists of all time. He developed the theory of relativity.</text>
+
+<title>Marie Curie</title>
+<text>Marie Curie (7 November 1867 - 4 July 1934) was a Polish and naturalised-French physicist and chemist who conducted pioneering research on radioactivity. She was the first woman to win a Nobel Prize.</text>
+
+<title>{title}</title>
+<text>"""
+
+few_shot_queries = [
+    ("Isaac Newton",        "Isaac Newton"),
+    ("World War II",        "World War II"),
+    ("DNA",                 "DNA"),
+    ("The Internet",        "The Internet"),
+    ("Black hole",          "Black hole"),
+    ("Charles Darwin",      "Charles Darwin"),
+]
+
+FEW_SHOT_GENERATE_LEN = 300
+
+for title, display in few_shot_queries:
+    prompt_str = FEW_SHOT_PREFIX.replace("{title}", title)
+    raw = prompt_str.encode("utf-8")
+    prompt_tensor = torch.tensor(list(raw), dtype=torch.long).cuda()
+
+    print(f"\n{'─'*60}")
+    print(f"[FEW-SHOT TARGET] {display}")
+    print(f"[PROMPT LENGTH]   {len(raw)} bytes")
+    print(f"{'─'*60}")
+
+    with torch.no_grad():
+        sample = model.sample(
+            prompt_tensor[None, ...],
+            seq_len=len(raw) + FEW_SHOT_GENERATE_LEN,
+            use_cache=False
+        )
+    generated = decode_tokens(sample[0][len(raw):])
+    print(f"[GENERATED] {generated}")
+
 # ── Actual val data continuation ─────────────────────────────────────────────
 print("\n\n" + "=" * 70)
 print("  REAL VAL DATA CONTINUATION  (prime = 150 bytes → generate 400)")

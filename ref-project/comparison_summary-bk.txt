@@ -1,0 +1,36 @@
+================================================================================
+公平对比实验结果摘要
+================================================================================
+
+模型说明:
+- TITANS (Full): Long-term Memory + Neural Memory
+- Without NM: 只有Long-term Memory
+- Vanilla Transformer: 无任何记忆模块
+
+详细结果:
+--------------------------------------------------------------------------------
+
+序列长度: 128
+  TITANS (Full)             - PPL:   2.55, Accuracy: 72.29%
+  Without NM                - PPL:   2.59, Accuracy: 71.81%
+  Vanilla Transformer       - PPL:   2.67, Accuracy: 71.16%
+
+序列长度: 256
+  TITANS (Full)             - PPL:   2.44, Accuracy: 73.38%
+  Without NM                - PPL:   2.52, Accuracy: 72.51%
+  Vanilla Transformer       - PPL:   2.59, Accuracy: 71.84%
+
+序列长度: 512
+  TITANS (Full)             - PPL:   2.50, Accuracy: 73.02%
+  Without NM                - PPL:   2.65, Accuracy: 71.40%
+  Vanilla Transformer       - PPL:   2.72, Accuracy: 70.78%
+
+序列长度: 1024
+  TITANS (Full)             - PPL:   2.52, Accuracy: 72.83%
+  Without NM                - PPL:   2.69, Accuracy: 71.25%
+  Vanilla Transformer       - PPL:   2.76, Accuracy: 70.44%
+
+序列长度: 2048
+  TITANS (Full)             - PPL:   2.53, Accuracy: 72.92%
+  Without NM                - PPL:   2.73, Accuracy: 71.25%
+  Vanilla Transformer       - PPL:   2.82, Accuracy: 70.52%
