@@ -205,6 +205,10 @@ runs/
 runs_baseline/
 runs_v2/
 runs_v3/
+runs_v4/
+runs_v4_1/
+runs_v5/
+runs_v6/
 
 # Training log files
 *.log
@@ -215,3 +219,6 @@ quantization_noise/
 
 # PDF files
 *.pdf
+
+# Allow evaluation result CSVs (small experiment result tables)
+!eval_quant_noise_v*/*.csv

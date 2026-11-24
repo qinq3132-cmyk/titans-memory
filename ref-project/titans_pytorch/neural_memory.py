@@ -541,18 +541,52 @@ class NeuralMemory(Module):
 
         self.register_buffer('zero', torch.tensor(0.), persistent = False)
 
-        # quant + noise for retrieve phase (inference only)
+        # quant + noise for retrieve phase
         # default: 4-bit uniform quantization + Gaussian noise (scale=0.05)
+        # apply_in_training=False (default): 仅 eval 生效（v3 行为）
+        # apply_in_training=True : 训练前向也注入量化+噪声（QAT，STE 回传梯度）
+        # quantized_storage=True : v5——cell 存 4-bit 离散级，store 写后量化(snapping，无写噪声)，
+        #   store 内部读也走量化+读噪声；量化误差跨 TTT 更新累积
         _default_quant_cfg = dict(
             enabled=False,
             bit=4,
             noise_scale=0.05,
             noise_method='add',
             noise_range='max',
+            apply_in_training=False,
+            quantized_storage=False,
+            write_noise_scale=0.0,
         )
         if quant_noise_cfg is not None:
             _default_quant_cfg.update(quant_noise_cfg)
         self._quant_noise_cfg = _default_quant_cfg
+
+    # ── v5 量化存储辅助方法 ──────────────────────────────────────────────
+    def _write_quantize(self, weights):
+        """写量化：cell 吸附到最近 4-bit 级 + 写噪声(编程噪声)。STE 回传梯度。返回 TensorDict。"""
+        if not self._quant_noise_cfg.get('quantized_storage'):
+            return weights
+        q = quantize_weight_dict(
+            dict(weights),
+            bit=self._quant_noise_cfg['bit'],
+            noise_scale=self._quant_noise_cfg.get('write_noise_scale', 0.0),
+            noise_method=self._quant_noise_cfg['noise_method'],
+            noise_range=self._quant_noise_cfg['noise_range'],
+        )
+        return TensorDict(q)
+
+    def _read_quantize(self, weights):
+        """读量化：量化 + 读噪声（控制器读 cell / retrieve 读）。STE 回传梯度。返回 TensorDict。"""
+        if not self._quant_noise_cfg.get('quantized_storage'):
+            return weights
+        q = quantize_weight_dict(
+            dict(weights),
+            bit=self._quant_noise_cfg['bit'],
+            noise_scale=self._quant_noise_cfg['noise_scale'],
+            noise_method=self._quant_noise_cfg['noise_method'],
+            noise_range=self._quant_noise_cfg['noise_range'],
+        )
+        return TensorDict(q)
 
     @property
     def memory_model_parameter_dict(self):
@@ -616,12 +650,14 @@ class NeuralMemory(Module):
 
         if not exists(weights):
             weights = self.init_weights(batch)
+            weights = self._write_quantize(weights)   # v5: cell 出厂即吸附到离散级
 
         weights = TensorDict(weights)
 
         # allow for neural memory of a previous layer to influence surprise of current layer
 
         weights_for_surprise = repeat_dict_values(weights, 'b ... -> b n ...', n = num_chunks)
+        weights_for_surprise = self._read_quantize(weights_for_surprise)   # v5: 控制器读 cell 也是量化+噪声
 
         # initial norm
 
@@ -891,9 +927,14 @@ class NeuralMemory(Module):
         queries = rearrange(queries, 'b h (n c) d -> (b h n) c d', c = chunk_size)
 
         # forward functional call
-        # apply quantization + noise to dynamic weights during inference (eval mode)
+        # apply quantization + noise to dynamic weights
+        #   - 默认仅 eval 模式（apply_in_training=False）
+        #   - apply_in_training=True 时训练前向也注入（QAT，STE 回传）
         _qcfg = self._quant_noise_cfg
-        if _qcfg['enabled'] and not self.training:
+        _apply_quant = _qcfg['enabled'] and (
+            (not self.training) or _qcfg.get('apply_in_training', False)
+        )
+        if _apply_quant:
             _weights_for_retrieve = quantize_weight_dict(
                 dict(weights),
                 bit=_qcfg['bit'],
@@ -1043,6 +1084,11 @@ class NeuralMemory(Module):
                 mask = maybe_store_mask,
                 return_surprises = True
             )
+
+            # v5: 写量化——store 更新后 cell 吸附到最近 4-bit 级（无写噪声），量化误差跨 TTT 段累积
+            next_updates = self._write_quantize(next_updates)
+            next_neural_mem_state = next_neural_mem_state._replace(
+                weights=self._write_quantize(next_neural_mem_state.weights))
 
             weights = next_neural_mem_state.weights
             seq_index = next_neural_mem_state.seq_index

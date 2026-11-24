@@ -56,6 +56,10 @@ def quantize_weight_dict(
     """
     result = {}
     for name, w in weights_dict.items():
+        # 空张量保护（单 token decode 时某些权重张量可能 numel==0，max() 会报错）
+        if hasattr(w, 'numel') and w.numel() == 0:
+            result[name] = w
+            continue
         # 1. 均匀量化（对称，bit 位）
         w_q = data_quantization(w, symmetric=True, bit=bit)
 

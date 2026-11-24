@@ -51,7 +51,7 @@ from rotary_embedding_torch import RotaryEmbedding
 # 配置
 # ─────────────────────────────────────────────
 DEVICE           = "cuda" if torch.cuda.is_available() else "cpu"
-DATASET_PATH     = "./data/enwik8.gz"
+DATASET_PATH     = "/home/titans-pytorch-main/data/enwik8.gz"
 SEQUENCE_LENGTHS = [128, 256, 512, 1024, 2048, 4096]
 NUM_EVAL_SEQS    = 200          # 每个长度评估多少条序列
 EVAL_LAST_N      = 64           # 只评估最后N个token
