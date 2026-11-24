@@ -1,0 +1,6 @@
+V6 TITANS — 流式超长上下文结果汇总
+bpc_drift = 末窗 BPC - 首窗 BPC（记忆巩固稳定性 / 漂移指标）
+
+       variant  total_len  n_seqs      BPC     Acc%  BPC@first  BPC@last    drift
+---------------------------------------------------------------------------------
+   quant_noise      32768       2   1.4327    70.05     1.4789    1.3735  -0.1054

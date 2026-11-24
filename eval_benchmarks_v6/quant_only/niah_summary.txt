@@ -1,0 +1,15 @@
+V6 TITANS — 随机 needle NIAH 结果汇总
+needle=16 随机字母数字字符, recall prompt=前8字符, completion=后8字符
+acc_char: completion 逐字符 top-1 | acc_exact: 8 字符全对比例
+
+       variant  seq_len  depth  distance  acc_char%  acc_exact%  bpc_comp
+-------------------------------------------------------------------------
+    quant_only      512   0.25       359       0.00        0.00    8.9925
+    quant_only      512   0.50       239       0.00        0.00    8.7512
+    quant_only      512   0.75       120       0.00        0.00    8.3289
+    quant_only     2048   0.25      1511       0.00        0.00    7.6530
+    quant_only     2048   0.50      1007       4.17        0.00    9.4765
+    quant_only     2048   0.75       504       0.00        0.00    9.8370
+    quant_only     8192   0.25      6119       0.00        0.00    8.8803
+    quant_only     8192   0.50      4079       0.00        0.00    7.5706
+    quant_only     8192   0.75      2040       4.17        0.00    8.4040

@@ -222,3 +222,4 @@ quantization_noise/
 
 # Allow evaluation result CSVs (small experiment result tables)
 !eval_quant_noise_v*/*.csv
+!eval_benchmarks_v6/**/*.csv
