@@ -31,14 +31,15 @@ if _project_root not in sys.path:
 
 from quantization_noise.quant_util import data_quantization, add_noise
 
+import torch
+
 
 def quantize_weight_dict(
     weights_dict: dict,
     bit: int = 4,
     noise_scale: float = 0.05,
     noise_method: str = 'add',
-    noise_range: str = 'max',
-) -> dict:
+    noise_range: str = 'max',) -> dict:
     """
     对动态权重字典中的每个张量做均匀量化 + 高斯加噪。
 
@@ -74,3 +75,31 @@ def quantize_weight_dict(
 
         result[name] = w_q
     return result
+
+
+def quantize_activation(t, bit: int):
+    """
+    NM 层激活值（DAC 模拟输入 / ADC 模拟输出）的对称均匀量化，STE 直通梯度。
+
+    与 data_quantization 的 symmetric 路径数学一致（data_range=2·max, 
+    quant_range=2^bit-2, zero_point=0），但全部使用张量运算、不含 .item()，
+    因此可在 torch.func.vmap 内安全使用（store 路径的 per-sample grad 会被
+    vmap，data_quantization 里的 .item() 在 vmap 下会报错）。
+
+    物理含义：
+      - dac_bits  : 数字投影后的 k/q 向量经 DAC 变为模拟电压输入 VMM
+      - adc_bits  : VMM 读出电流和经 ADC 变回数字值 M(k)
+
+    前向 = 量化值，反向梯度直通（与权重侧 STE 形式一致）。
+    """
+    if bit is None or bit <= 0:
+        return t
+    th = t.abs().amax()
+    # 对称均匀量化：scale = 2·max / (2^bit - 2)，零点居中
+    scale = (2.0 * th) / (2**bit - 2) + 1e-12
+    q = torch.clamp(
+        torch.round(t / scale),
+        -(2**(bit - 1) - 1), (2**(bit - 1) - 1),
+    ) * scale
+    # STE：前向用量化值，反向梯度直通到原始激活
+    return t + (q - t).detach()

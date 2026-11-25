@@ -22,7 +22,7 @@ from titans_pytorch.memory_models import(
     ResidualNorm
 )
 
-from titans_pytorch.quant_noise_mem import quantize_weight_dict
+from titans_pytorch.quant_noise_mem import quantize_weight_dict, quantize_activation
 
 import einx
 from einops import einsum, rearrange, repeat, reduce, pack, unpack
@@ -398,6 +398,10 @@ class NeuralMemory(Module):
 
         def forward_and_loss(params, inputs, loss_weights, target):
             pred = functional_call(self.memory_model, params, inputs)
+            # ADC：store 内部 VMM 读出经 ADC 量化（vmap 安全，见 quantize_activation）
+            _adc_bits = self._quant_noise_cfg.get('adc_bits')
+            if _adc_bits and ((not self.training) or self._quant_noise_cfg.get('apply_in_training', False)):
+                pred = quantize_activation(pred, _adc_bits)
             loss = self.store_memory_loss_fn(pred, target) # simple mse loss in paper - eq (12) - |M(k) - v|²
             weighted_loss = loss * loss_weights
             return weighted_loss.sum(), loss
@@ -556,6 +560,8 @@ class NeuralMemory(Module):
             apply_in_training=False,
             quantized_storage=False,
             write_noise_scale=0.0,
+            dac_bits=None,   # NM 层模拟输入侧 DAC 位数（queries/keys 进 VMM 前），None/0 = 禁用
+            adc_bits=None,   # NM 层模拟输出侧 ADC 位数（VMM 读出 M(k) 之后），None/0 = 禁用
         )
         if quant_noise_cfg is not None:
             _default_quant_cfg.update(quant_noise_cfg)
@@ -746,6 +752,12 @@ class NeuralMemory(Module):
 
         # get grads and extra auxiliary loss (for backwarding through qkv projection in base neural memory module)
 
+        # DAC：store 的 VMM 模拟输入侧——数字预处理（norm/分头）全部完成后，
+        # keys 经 DAC 变为模拟电压输入；values 是数字域 MSE target，不过 DAC
+        _dac_bits = self._quant_noise_cfg.get('dac_bits')
+        if _dac_bits and ((not self.training) or self._quant_noise_cfg.get('apply_in_training', False)):
+            keys = quantize_activation(keys, _dac_bits)
+
         grads, unweighted_mem_model_loss = self.per_sample_grad_fn(dict(weights_for_surprise), keys, adaptive_lr, values)
 
         grads = TensorDict(grads)
@@ -926,6 +938,11 @@ class NeuralMemory(Module):
 
         queries = rearrange(queries, 'b h (n c) d -> (b h n) c d', c = chunk_size)
 
+        # DAC：retrieve 的 VMM 模拟输入侧——queries 数字预处理（norm/分头）完成后经 DAC 进 VMM
+        _dac_bits = self._quant_noise_cfg.get('dac_bits')
+        if _dac_bits and ((not self.training) or _qcfg.get('apply_in_training', False)):
+            queries = quantize_activation(queries, _dac_bits)
+
         # forward functional call
         # apply quantization + noise to dynamic weights
         #   - 默认仅 eval 模式（apply_in_training=False）
@@ -946,6 +963,11 @@ class NeuralMemory(Module):
             _weights_for_retrieve = dict(weights)
 
         values = functional_call(self.memory_model, _weights_for_retrieve, queries)
+
+        # ADC：VMM 读出电流和经 ADC 变回数字值（在后处理 norm 之前）
+        _adc_bits = self._quant_noise_cfg.get('adc_bits')
+        if _adc_bits and ((not self.training) or _qcfg.get('apply_in_training', False)):
+            values = quantize_activation(values, _adc_bits)
 
         # reconstitute batch dimension
 
