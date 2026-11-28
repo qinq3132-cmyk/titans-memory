@@ -67,10 +67,10 @@ import matplotlib.pyplot as plt
 DATASET_PATH     = "/home/titans-pytorch-main/data/enwik8.gz"
 SEQUENCE_LENGTHS = [128, 256, 512, 1024, 2048, 4096]
 NUM_EVAL_SEQS    = int(os.environ.get("EVAL_SEQS", 200))
-NUM_GPUS         = 4
-OUTPUT_DIR       = Path("./eval_v7_final")
+NUM_GPUS         = int(os.environ.get("EVAL_GPUS", 4))
+OUTPUT_DIR       = Path(os.environ.get("EVAL_OUT_DIR", "./eval_v7_final"))
 
-V6_CKPT = "./checkpoints_v7/ckpt_step_002000_final.pt"
+V6_CKPT = os.environ.get("V7_CKPT", "./checkpoints_v7/ckpt_step_002000_final.pt")
 
 # ── W_t 部署条件（v6）/ 全干净 ──────────────────────────────────────────────
 WQ = dict(enabled=True, bit=4, noise_scale=0.05, noise_method="add", noise_range="max",
